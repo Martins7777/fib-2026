@@ -261,7 +261,7 @@ header p{font-size:11px;opacity:.8;margin-top:2px}
 .dl-text-title{font-size:13px;font-weight:700;color:var(--primary-dark)}
 .dl-text-sub{font-size:11px;color:var(--muted);margin-top:1px}
 
-/* ── GITHUB SYNC ── */
+/* ── CLOUDFLARE WORKER SYNC ── */
 .gh-status{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:5px 11px;border-radius:6px;border:1.5px solid transparent;transition:all .2s;cursor:default;white-space:nowrap}
 .gh-status.ok{background:#f0fdf4;color:#166534;border-color:#bbf7d0}
 .gh-status.err{background:#fff1f2;color:#b91c1c;border-color:#fecdd3}
@@ -310,9 +310,9 @@ header p{font-size:11px;opacity:.8;margin-top:2px}
     <p>Multi-dia | Gestion de empleados | Asignacion por tramos | Resumen de entradas</p>
   </div>
   <div class="header-actions">
-    <span id="ghStatusBtn" class="gh-status uncfg" onclick="openGhModal()" title="Configurar sincronizacion con Google Sheets">
+    <span id="ghStatusBtn" class="gh-status uncfg" onclick="openGhModal()" title="Configurar sincronizacion con Cloudflare Workers">
       <span class="gh-dot" id="ghDot"></span>
-      <span id="ghStatusTxt">Sheets: no configurado</span>
+      <span id="ghStatusTxt">Worker: no configurado</span>
     </span>
     <button class="btn btn-ghost" onclick="window.print()">🖨 Imprimir</button>
     <button class="btn btn-ghost" onclick="saveAll()">💾 Guardar</button>
@@ -641,39 +641,25 @@ header p{font-size:11px;opacity:.8;margin-top:2px}
   </div>
 </div>
 
-<!-- MODAL GOOGLE SHEETS CONFIG -->
+<!-- MODAL CLOUDFLARE WORKER CONFIG -->
 <div class="gh-modal-overlay" id="ghModalOverlay">
   <div class="gh-modal">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
-      <h3>🟢 Sincronizacion con Google Sheets</h3>
+      <h3>☁️ Sincronizacion con Cloudflare Workers</h3>
       <button class="modal-close" onclick="closeGhModal()">✕</button>
     </div>
-    <p>Los datos se guardaran en tu Google Sheet via Apps Script. Cualquier persona con la URL podra leer y escribir los mismos datos.</p>
+    <p>Los datos se guardaran en un Worker de Cloudflare con KV Storage. Solo quien tenga la URL puede leer y escribir.</p>
     <div class="gh-info-box">
       <strong>Pasos para configurar (una sola vez):</strong><br>
-      1. Abre <strong>script.google.com</strong> y crea un nuevo proyecto<br>
-      2. Pega el codigo Apps Script que aparece abajo y guarda<br>
-      3. Click en <strong>Implementar → Nueva implementacion → Aplicacion web</strong><br>
-      4. Ejecutar como: <strong>Yo</strong> | Acceso: <strong>Cualquier persona</strong><br>
-      5. Copia la <strong>URL de implementacion</strong> y pegala abajo
+      1. Ve a <strong>dash.cloudflare.com</strong> → Workers &amp; Pages → Create a Worker<br>
+      2. Pega el codigo del archivo <code>worker.js</code> y despliega<br>
+      3. En el Worker → Settings → KV Namespace Bindings, añade:<br>
+      &nbsp;&nbsp;&nbsp;Variable: <code>PLANIFICADOR_KV</code> → KV namespace que hayas creado<br>
+      4. Copia la URL del Worker (ej: <code>https://fib-2026.tuusuario.workers.dev</code>) y pegala abajo
     </div>
-    <div class="gh-info-box" style="background:#f0fdf4;border-color:#bbf7d0;color:#166534;font-family:monospace;font-size:10px;line-height:1.8;white-space:pre-wrap;user-select:all" title="Selecciona todo y copia">function doGet(e){
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  var sh=ss.getSheetByName('data')||ss.insertSheet('data');
-  var val=sh.getRange('A1').getValue();
-  var res=ContentService.createTextOutput(val||'{}');
-  res.setMimeType(ContentService.MimeType.JSON);
-  return res;
-}
-function doPost(e){
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  var sh=ss.getSheetByName('data')||ss.insertSheet('data');
-  sh.getRange('A1').setValue(e.postData.contents);
-  return ContentService.createTextOutput('ok');
-}</div>
     <div class="form-row" style="margin-top:12px">
-      <label>URL de implementacion (Apps Script Web App)</label>
-      <input id="ghToken" type="text" placeholder="https://script.google.com/macros/s/.../exec"/>
+      <label>URL del Worker desplegado</label>
+      <input id="ghToken" type="text" placeholder="https://fib-2026.tuusuario.workers.dev"/>
     </div>
     <div class="gh-modal-actions">
       <button class="btn btn-danger btn-sm" onclick="clearGhConfig()">🗑 Borrar config</button>
@@ -1030,17 +1016,19 @@ function loadState(){
     {id:50,name:"Yolanda Q.",role:"Camarero",dni:"15444439X",ss:"28/24839485/50",talla:"S",salario:12.0,notes:'',color:"#0D9488"}
   ],assignmentsByDay:buildDefaultAssignments(),horasEliminadas:{},tarifas:{camarero:12,encargado:14},currentDay:DAYS[0]};
 }
-// GOOGLE SHEETS SYNC
-const GH_CONFIG_KEY='gs-sync-config';
+// CLOUDFLARE WORKER SYNC
+const GH_CONFIG_KEY='cf-sync-config';
+const CF_WORKER_DEFAULT='https://fip-2026.aldo7ms.workers.dev/';
 
 function getGhConfig(){
   try{
     const v=localStorage.getItem(GH_CONFIG_KEY);
-    if(!v) return null;
-    const parsed=JSON.parse(v);
-    if(parsed.token) return parsed;
-    return null;
-  }catch(e){return null;}
+    if(v){
+      const parsed=JSON.parse(v);
+      if(parsed.token) return parsed;
+    }
+  }catch(e){}
+  return {token:CF_WORKER_DEFAULT};
 }
 function gsUrl(cfg){ return cfg.token; }
 
@@ -1058,61 +1046,40 @@ function setGhStatus(mode,txt){
 
 async function ghLoadRemote(){
   const cfg=getGhConfig(); if(!cfg) return null;
-  setGhStatus('syncing','Cargando desde Sheets...');
-  return new Promise((resolve)=>{
-    const cbName='_gsLoad'+Date.now();
-    const script=document.createElement('script');
-    const url=gsUrl(cfg)+'?callback='+cbName;
-    let done=false;
-    window[cbName]=function(data){
-      done=true;
-      delete window[cbName];
-      script.remove();
-      if(!data||data==='{}'||Object.keys(data).length===0){
-        setGhStatus('ok','Sheets conectado | sin datos remotos');
-        resolve(null);
-      } else {
-        setGhStatus('ok','Sincronizado con Sheets ✓');
-        resolve({data});
-      }
-    };
-    script.onerror=function(){
-      if(done) return;
-      done=true;
-      delete window[cbName];
-      script.remove();
-      setGhStatus('err','Error al leer Sheets');
-      console.error('Sheets JSONP error');
-      resolve(null);
-    };
-    setTimeout(()=>{
-      if(done) return;
-      done=true;
-      delete window[cbName];
-      script.remove();
-      setGhStatus('err','Timeout al leer Sheets');
-      resolve(null);
-    },10000);
-    script.src=url;
-    document.head.appendChild(script);
-  });
+  setGhStatus('syncing','Cargando desde Worker...');
+  try{
+    const res=await fetch(gsUrl(cfg),{method:'GET'});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    if(!data||Object.keys(data).length===0){
+      setGhStatus('ok','Worker conectado | sin datos remotos');
+      return null;
+    }
+    setGhStatus('ok','Sincronizado con Worker ✓');
+    return {data};
+  }catch(e){
+    setGhStatus('err','Error al leer Worker');
+    console.error('CF Worker load error:',e);
+    return null;
+  }
 }
 
 async function ghSaveRemote(stateObj){
   const cfg=getGhConfig(); if(!cfg) return false;
-  setGhStatus('syncing','Guardando en Sheets...');
+  setGhStatus('syncing','Guardando en Worker...');
   try{
-    await fetch(gsUrl(cfg),{
+    const res=await fetch(gsUrl(cfg),{
       method:'POST',
-      mode:'no-cors',
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify(stateObj)
     });
-    setGhStatus('ok','Guardado en Sheets ✓ | '+new Date().toLocaleTimeString('es-ES'));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    setGhStatus('ok','Guardado en Worker ✓ | '+new Date().toLocaleTimeString('es-ES'));
     return true;
   }catch(e){
-    setGhStatus('err','Error al guardar en Sheets');
-    console.error('Sheets save error:',e);
-    showToast('⚠ Error al guardar en Sheets: '+e.message);
+    setGhStatus('err','Error al guardar en Worker');
+    console.error('CF Worker save error:',e);
+    showToast('⚠ Error al guardar en Worker: '+e.message);
     return false;
   }
 }
@@ -1131,28 +1098,28 @@ document.addEventListener('DOMContentLoaded',()=>{
 });
 async function saveGhConfig(){
   const token=document.getElementById('ghToken').value.trim();
-  if(!token){showToast('⚠ Pega la URL de tu Apps Script');return;}
-  if(!token.startsWith('https://script.google.com')){showToast('⚠ La URL debe ser de script.google.com');return;}
+  if(!token){showToast('⚠ Pega la URL de tu Worker');return;}
+  if(!token.startsWith('https://')){showToast('⚠ La URL debe empezar por https://');return;}
   const cfg={token};
   localStorage.setItem(GH_CONFIG_KEY,JSON.stringify(cfg));
   closeGhModal();
-  showToast('Conectando con Google Sheets...');
+  showToast('Conectando con Cloudflare Worker...');
   const remote=await ghLoadRemote();
   if(remote?.data){
-    if(confirm('Se han encontrado datos en Google Sheets ('+Object.keys(remote.data.assignmentsByDay||{}).length+' dias, '+(remote.data.employees||[]).length+' empleados).\n\nCargar datos de Sheets? (Esto reemplazara los datos locales actuales)')){
+    if(confirm('Se han encontrado datos en el Worker ('+Object.keys(remote.data.assignmentsByDay||{}).length+' dias, '+(remote.data.employees||[]).length+' empleados).\n\nCargar datos del Worker? (Esto reemplazara los datos locales actuales)')){
       applyRemoteState(remote.data);
-      showToast('✓ Datos cargados desde Google Sheets');
+      showToast('✓ Datos cargados desde Cloudflare Worker');
     }
   } else {
-    showToast('✓ Google Sheets configurado | sin datos remotos aun');
+    showToast('✓ Cloudflare Worker configurado | sin datos remotos aun');
   }
 }
 function clearGhConfig(){
-  if(!confirm('Borrar la configuracion de Google Sheets? Los datos del planificador no se eliminaran.')) return;
+  if(!confirm('Borrar la configuracion del Worker? Los datos del planificador no se eliminaran.')) return;
   localStorage.removeItem(GH_CONFIG_KEY);
   closeGhModal();
-  setGhStatus('uncfg','Sheets: no configurado');
-  showToast('Configuracion de Sheets eliminada');
+  setGhStatus('uncfg','Worker: no configurado');
+  showToast('Configuracion del Worker eliminada');
 }
 function applyRemoteState(data){
   if(data.employees) state.employees=data.employees.map(e=>({...e,id:typeof e.id==='string'?parseInt(e.id,10)||e.id:e.id}));
@@ -1169,12 +1136,12 @@ function applyRemoteState(data){
 
 async function initGhSync(){
   const cfg=getGhConfig();
-  if(!cfg){setGhStatus('uncfg','Sheets: no configurado');return;}
-  setGhStatus('syncing','Cargando desde Sheets...');
+  if(!cfg){setGhStatus('uncfg','Worker: no configurado');return;}
+  setGhStatus('syncing','Cargando desde Worker...');
   const remote=await ghLoadRemote();
   if(remote?.data){
     applyRemoteState(remote.data);
-    showToast('✓ Datos cargados desde Google Sheets');
+    showToast('✓ Datos cargados desde Cloudflare Worker');
   }
 }
 
